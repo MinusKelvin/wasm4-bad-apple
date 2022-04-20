@@ -71,21 +71,29 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
 
     let mut i = 0;
     while i < WIDTH * HEIGHT {
-        let length = stream.read_int()?;
         let kind = stream.read_bits(BPP + 1)?;
 
-        if kind == 1 << BPP {
-            i += length;
-            continue;
-        }
-
-        for _ in 0..length {
-            let (x, y) = match vertical {
-                false => (i % WIDTH, i / WIDTH),
-                true => (i / HEIGHT, i % HEIGHT),
-            };
-            set(x, y, kind as u8);
-            i += 1;
+        if kind > 1 << BPP {
+            let length = kind - (1 << BPP) + 1;
+            for _ in 0..length {
+                let (x, y) = match vertical {
+                    false => (i % WIDTH, i / WIDTH),
+                    true => (i / HEIGHT, i % HEIGHT),
+                };
+                set(x, y, stream.read_bits(BPP)? as u8);
+                i += 1;
+            }
+        } else if kind == 1 << BPP {
+            i += stream.read_int()?;
+        } else {
+            for _ in 0..stream.read_int()? {
+                let (x, y) = match vertical {
+                    false => (i % WIDTH, i / WIDTH),
+                    true => (i / HEIGHT, i % HEIGHT),
+                };
+                set(x, y, kind as u8);
+                i += 1;
+            }
         }
     }
 

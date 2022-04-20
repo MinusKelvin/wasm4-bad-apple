@@ -60,6 +60,7 @@ impl ColorMap for Palette {
 struct Run {
     length: u32,
     kind: u8,
+    extra_data: BitVec,
 }
 
 fn main() {
@@ -115,19 +116,26 @@ fn main() {
     }
 
     let mut orderings = [0; 2];
-    let mut kinds = [0; 5];
+    let mut kinds = [0; 8];
+    let mut lengths = [0; (RESCALE_WIDTH * RESCALE_HEIGHT) as usize];
     for (vertical, runs) in data {
         movie.write(vertical);
         orderings[vertical as usize] += 1;
         for run in runs {
-            movie.write_int(run.length);
             movie.write_bits(run.kind as u32, BPP + 1);
+            if run.kind > UNCHANGED_BIT as u8 {
+                movie.append(run.extra_data);
+            } else {
+                movie.write_int(run.length);
+                lengths[run.length as usize - 1] += 1;
+            }
             kinds[run.kind as usize] += 1;
         }
     }
 
     println!("cargo:warning=Orderings {:?}", orderings);
     println!("cargo:warning=Kinds {:?}", kinds);
+    println!("cargo:warning=Lengths {:?}", lengths);
 
     movie
         .dump(BufWriter::new(
@@ -149,6 +157,7 @@ fn encode(mut value_sets: impl Iterator<Item = u8>) -> Vec<Run> {
             data.push(Run {
                 length,
                 kind: current.trailing_zeros() as u8,
+                extra_data: BitVec::new(),
             });
             length = 1;
             current = next;
@@ -160,6 +169,31 @@ fn encode(mut value_sets: impl Iterator<Item = u8>) -> Vec<Run> {
     data.push(Run {
         length,
         kind: current.trailing_zeros() as u8,
+        extra_data: BitVec::new(),
+    });
+
+    data.dedup_by(|next, prev| {
+        if prev.length + next.length <= UNCHANGED_BIT && next.kind < UNCHANGED_BIT as u8 {
+            if prev.kind < UNCHANGED_BIT as u8 {
+                for _ in 0..prev.length {
+                    prev.extra_data.write_bits(prev.kind as u32, BPP);
+                }
+                for _ in 0..next.length {
+                    prev.extra_data.write_bits(next.kind as u32, BPP);
+                }
+                prev.length += next.length;
+                prev.kind = (UNCHANGED_BIT + prev.length - 1) as u8;
+                return true;
+            } else if prev.kind > UNCHANGED_BIT as u8 {
+                for _ in 0..next.length {
+                    prev.extra_data.write_bits(next.kind as u32, BPP);
+                }
+                prev.kind += next.length as u8;
+                prev.length += next.length;
+                return true;
+            }
+        }
+        false
     });
 
     data
