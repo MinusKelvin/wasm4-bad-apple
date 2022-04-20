@@ -1,220 +1,85 @@
 #![no_std]
 #![cfg_attr(feature = "quiet", allow(warnings))]
 
+mod bitstream;
 mod wasm4;
+mod audio;
 
-struct BitReader {
-    from: &'static [u8],
-    current: u8,
-    current_bit: u8,
-}
+use core::mem::MaybeUninit;
 
-impl BitReader {
-    fn read_bits(&mut self, count: u8) -> Option<u32> {
-        let mut bits = 0;
-        for i in 0..count {
-            bits |= (self.read_one()? as u32) << i;
-        }
-        Some(bits)
-    }
-
-    fn read_one(&mut self) -> Option<bool> {
-        if self.current_bit == 8 {
-            let (&next, rest) = self.from.split_first()?;
-            self.current = next;
-            self.from = rest;
-            self.current_bit = 0;
-        }
-        let result = self.current & 1 << self.current_bit != 0;
-        self.current_bit += 1;
-        Some(result)
-    }
-
-    fn read_unary(&mut self) -> Option<u32> {
-        let mut v = 0;
-        while !self.read_one()? {
-            v += 1
-        }
-        Some(v)
-    }
-
-    fn read_elias_gamma(&mut self) -> Option<u32> {
-        let l = self.read_unary()? as u8;
-        let v = self.read_bits(l)?;
-        Some(v | 1 << l)
-    }
-
-    fn read_elias_delta(&mut self) -> Option<u32> {
-        let l = self.read_elias_gamma()? as u8 - 1;
-        let v = self.read_bits(l)?;
-        Some(v | 1 << l)
-    }
-}
+use bitstream::BitStream;
 
 const MOVIE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/movie.bin"));
+
 const FRAMERATE: u32 = MOVIE[0] as u32;
 const WIDTH: u32 = MOVIE[1] as u32;
 const HEIGHT: u32 = MOVIE[2] as u32;
-const BPP: u8 = 2;
+const BPP: u8 = 1;
 
 const PIXEL_SIZE: u32 = match (160 / WIDTH, 160 / HEIGHT) {
     (w, h) if w < h => w,
     (_, h) => h,
 };
 
-static mut STATE: (BitReader, u32) = (
-    BitReader {
-        from: MOVIE,
-        current: 0,
-        current_bit: 8,
-    },
-    0,
-);
+static mut STATE: MaybeUninit<(BitStream, u32, audio::Program)> = MaybeUninit::uninit();
 
 #[no_mangle]
 fn start() {
     unsafe {
         *wasm4::SYSTEM_FLAGS =
             wasm4::SYSTEM_PRESERVE_FRAMEBUFFER | wasm4::SYSTEM_HIDE_GAMEPAD_OVERLAY;
+        STATE = MaybeUninit::new((BitStream::new(MOVIE), 0, audio::Program::new()));
+        let stream = &mut STATE.assume_init_mut().0;
         // Skip header
-        STATE.0.read_bits(24);
+        stream.read_bits(24);
         // Load palette
-        *wasm4::PALETTE = [
-            STATE.0.read_bits(24).unwrap(),
-            STATE.0.read_bits(24).unwrap(),
-            STATE.0.read_bits(24).unwrap(),
-            STATE.0.read_bits(24).unwrap(),
-        ];
+        for i in 0..1 << BPP {
+            (*wasm4::PALETTE)[i] = stream.read_bits(24).unwrap();
+        }
         (*wasm4::FRAMEBUFFER).fill(0);
     }
 }
 
 #[no_mangle]
 fn update() {
-    let state = unsafe { &mut STATE };
+    let state = unsafe { STATE.assume_init_mut() };
 
     state.1 += FRAMERATE;
 
     while state.1 >= 60 {
         state.1 -= 60;
         if decode_frame(&mut state.0).is_none() {
-            unsafe {
-                STATE = (
-                    BitReader {
-                        from: MOVIE,
-                        current: 0,
-                        current_bit: 8,
-                    },
-                    0,
-                );
-            }
             start();
             decode_frame(&mut state.0);
         }
     }
+
+    state.2.update();
 }
 
-fn decode_frame(stream: &mut BitReader) -> Option<()> {
-    let mut i = stream.read_elias_delta()? - 1;
+fn decode_frame(stream: &mut BitStream) -> Option<()> {
+    let vertical = stream.read_one()?;
+
+    let mut i = 0;
     while i < WIDTH * HEIGHT {
-        let (x, y) = (i % WIDTH, i / WIDTH);
-        let w = stream.read_elias_delta()?;
-        let h = stream.read_elias_delta()?;
+        let length = stream.read_int()?;
+        let kind = stream.read_bits(BPP + 1)?;
 
-        let coder = if stream.read_one()? {
-            6
-        } else if stream.read_one()? {
-            0
-        } else if stream.read_one()? {
-            1
-        } else if stream.read_one()? {
-            if stream.read_one()? {
-                4
-            } else {
-                5
-            }
-        } else if stream.read_one()? {
-            2
-        } else {
-            3
-        };
-
-        match coder {
-            0 => rle_rect(stream, false, w, h, |dx, dy, p| set(x + dx, y + dy, p)),
-            1 => rle_rect(stream, true, w, h, |dx, dy, p| set(x + dx, y + dy, p)),
-            2 => rle_rect(stream, false, w, h, |dx, dy, p| xor(x + dx, y + dy, p)),
-            3 => rle_rect(stream, true, w, h, |dx, dy, p| xor(x + dx, y + dy, p)),
-            4 => difflist(stream, false, x, y, w, h).unwrap(),
-            5 => difflist(stream, true, x, y, w, h).unwrap(),
-            6 => {
-                for i in 0..w * h {
-                    let (dx, dy) = (i % w, i / w);
-                    set(x + dx, y + dy, stream.read_bits(BPP)? as u8);
-                }
-            }
-            _ => unreachable!(),
+        if kind == 1 << BPP {
+            i += length;
+            continue;
         }
 
-        // for y in y..y+h {
-        //     for x in x..x+w {
-        //         set(x, y, 3);
-        //     }
-        // }
-
-        i += stream.read_elias_delta()?;
-    }
-
-    Some(())
-}
-
-fn rle_rect(
-    stream: &mut BitReader,
-    vertical: bool,
-    width: u32,
-    height: u32,
-    mut f: impl FnMut(u32, u32, u8),
-) {
-    for (i, v) in decode_rle(stream, BPP, width * height).enumerate() {
-        let i = i as u32;
-        let (x, y) = match vertical {
-            true => (i / height, i % height),
-            false => (i % width, i / width),
-        };
-        f(x, y, v as u8);
-    }
-}
-
-fn decode_rle(
-    stream: &mut BitReader,
-    value_size: u8,
-    mut items: u32,
-) -> impl Iterator<Item = u32> + '_ {
-    let mut v = 0;
-    let mut run_length = 0;
-    core::iter::from_fn(move || {
-        if items == 0 {
-            return None;
+        for _ in 0..length {
+            let (x, y) = match vertical {
+                false => (i % WIDTH, i / WIDTH),
+                true => (i / HEIGHT, i % HEIGHT),
+            };
+            set(x, y, kind as u8);
+            i += 1;
         }
-        if run_length == 0 {
-            run_length = stream.read_elias_delta()?;
-            v = stream.read_bits(value_size)?;
-        }
-        items -= 1;
-        run_length -= 1;
-        Some(v)
-    })
-}
-
-fn difflist(stream: &mut BitReader, vertical: bool, x: u32, y: u32, w: u32, h: u32) -> Option<()> {
-    let mut i = stream.read_elias_delta()? - 1;
-    while i < w * h {
-        let (dx, dy) = match vertical {
-            false => (i % w, i / w),
-            true => (i / h, i % h),
-        };
-        set(x + dx, y + dy, stream.read_bits(BPP)? as u8);
-        i += stream.read_elias_delta()?;
     }
+
     Some(())
 }
 

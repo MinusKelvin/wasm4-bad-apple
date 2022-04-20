@@ -1,8 +1,9 @@
 /target
-*.mkv
-*.mp4
-/frames
-/dk
-/badapple
 /.vscode
 cart.wasm
+
+# media files
+*.mid
+*.mkv
+*.mp4
+*.png

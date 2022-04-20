@@ -19,25 +19,29 @@ impl BitVec {
         }
     }
 
-    pub fn write_unary(&mut self, v: u32) {
+    fn write_unary(&mut self, v: u32) {
         for _ in 0..v {
             self.write(false);
         }
         self.write(true);
     }
 
-    pub fn write_elias_gamma(&mut self, v: u32) {
+    fn write_elias_gamma(&mut self, v: u32) {
         assert_ne!(v, 0);
         let n = (v + 1).next_power_of_two().trailing_zeros() - 1;
         self.write_unary(n);
         self.write_bits(v, n);
     }
 
-    pub fn write_elias_delta(&mut self, v: u32) {
+    fn write_elias_delta(&mut self, v: u32) {
         assert_ne!(v, 0);
         let n = (v + 1).next_power_of_two().trailing_zeros() - 1;
         self.write_elias_gamma(n + 1);
         self.write_bits(v, n);
+    }
+
+    pub fn write_int(&mut self, v: u32) {
+        self.write_elias_delta(v);
     }
 
     pub fn len(&self) -> usize {
