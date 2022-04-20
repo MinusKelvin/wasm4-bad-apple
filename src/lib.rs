@@ -67,7 +67,7 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
         undo_smooth_filter();
     }
 
-    let vertical = stream.read_one()?;
+    let order = stream.read_bits(2)?;
 
     let mut i = 0;
     while i < WIDTH * HEIGHT {
@@ -76,10 +76,7 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
         if kind > 1 << BPP {
             let length = kind - (1 << BPP) + 1;
             for _ in 0..length {
-                let (x, y) = match vertical {
-                    false => (i % WIDTH, i / WIDTH),
-                    true => (i / HEIGHT, i % HEIGHT),
-                };
+                let (x, y) = get_xy(i, order, WIDTH, HEIGHT);
                 set(x, y, stream.read_bits(BPP)? as u8);
                 i += 1;
             }
@@ -87,10 +84,7 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
             i += stream.read_int()?;
         } else {
             for _ in 0..stream.read_int()? {
-                let (x, y) = match vertical {
-                    false => (i % WIDTH, i / WIDTH),
-                    true => (i / HEIGHT, i % HEIGHT),
-                };
+                let (x, y) = get_xy(i, order, WIDTH, HEIGHT);
                 set(x, y, kind as u8);
                 i += 1;
             }
@@ -134,6 +128,25 @@ fn locate(x: u32, y: u32) -> (usize, u32) {
     let pixel_byte = pixel / 4;
     let pixel_shift = (pixel % 4) * 2;
     (pixel_byte as usize, pixel_shift)
+}
+
+fn get_xy(i: u32, order: u32, w: u32, h: u32) -> (u32, u32) {
+    if order & 1 == 1 {
+        let (y, x) = get_xy(i, order & !1, h, w);
+        return (x, y);
+    }
+    match order {
+        0 => (i % w, i / w),
+        2 => {
+            let y = i / w;
+            let x = i % w;
+            match y % 2 != 0 {
+                false => (x, y),
+                true => (w - x - 1, y),
+            }
+        }
+        _ => unreachable!()
+    }
 }
 
 #[panic_handler]

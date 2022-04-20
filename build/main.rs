@@ -76,7 +76,10 @@ fn main() {
     let images = (0..=last_frame)
         .into_par_iter()
         .map(|i| match i {
-            0 => Ok(GrayImage::new(RESCALE_WIDTH, RESCALE_HEIGHT)),
+            0 => Ok((
+                GrayImage::new(RESCALE_WIDTH, RESCALE_HEIGHT),
+                GrayImage::new(RESCALE_HEIGHT, RESCALE_WIDTH),
+            )),
             _ => image::open(format!("frames/{}.png", i * 30 / FRAMERATE + 31)).map(|img| {
                 let smol = imageops::resize(
                     &img.to_rgb8(),
@@ -84,7 +87,14 @@ fn main() {
                     RESCALE_HEIGHT,
                     imageops::FilterType::Gaussian,
                 );
-                imageops::index_colors(&smol, &Palette)
+                let base = imageops::index_colors(&smol, &Palette);
+                let mut transposed = GrayImage::new(base.height(), base.width());
+                for y in 0..transposed.height() {
+                    for x in 0..transposed.width() {
+                        transposed.put_pixel(x, y, *base.get_pixel(y, x));
+                    }
+                }
+                (base, transposed)
             }),
         })
         .collect::<Result<Vec<_>, _>>()
@@ -93,15 +103,18 @@ fn main() {
     let data: Vec<_> = images
         .par_windows(2)
         .map(|v| {
-            let prev_img = &v[0];
-            let img = &v[1];
-            let hdata = encode(value_sets(horizontal(img), horizontal(prev_img)));
-            let vdata = encode(value_sets(vertical(img), vertical(prev_img)));
-            if vdata.len() < hdata.len() {
-                (true, vdata)
-            } else {
-                (false, hdata)
-            }
+            let (prev_h, prev_v) = &v[0];
+            let (curr_h, curr_v) = &v[1];
+            [
+                encode(value_sets(scanline(curr_h), scanline(prev_h))),
+                encode(value_sets(scanline(curr_v), scanline(prev_v))),
+                encode(value_sets(snake(curr_h), snake(prev_h))),
+                encode(value_sets(snake(curr_v), snake(prev_v))),
+            ]
+            .into_iter()
+            .enumerate()
+            .min_by_key(|(_, data)| data.len())
+            .unwrap()
         })
         .collect();
 
@@ -115,12 +128,12 @@ fn main() {
         }
     }
 
-    let mut orderings = [0; 2];
+    let mut orderings = [0; 4];
     let mut kinds = [0; 8];
     let mut lengths = [0; (RESCALE_WIDTH * RESCALE_HEIGHT) as usize];
-    for (vertical, runs) in data {
-        movie.write(vertical);
-        orderings[vertical as usize] += 1;
+    for (order, runs) in data {
+        movie.write_bits(order as u32, 2);
+        orderings[order as usize] += 1;
         for run in runs {
             movie.write_bits(run.kind as u32, BPP + 1);
             if run.kind > UNCHANGED_BIT as u8 {
@@ -208,10 +221,15 @@ fn value_sets(
         .map(|(c, p)| 1 << c | ((c == p) as u8) << UNCHANGED_BIT)
 }
 
-fn horizontal(img: &GrayImage) -> impl Iterator<Item = u8> + '_ {
+fn scanline(img: &GrayImage) -> impl Iterator<Item = u8> + '_ {
     img.pixels().map(|p| p.0[0])
 }
 
-fn vertical(img: &GrayImage) -> impl Iterator<Item = u8> + '_ {
-    (0..img.width()).flat_map(move |x| (0..img.height()).map(move |y| img.get_pixel(x, y).0[0]))
+fn snake(img: &GrayImage) -> impl Iterator<Item = u8> + '_ {
+    (0..img.height()).flat_map(move |y| {
+        (0..img.width()).map(move |x| match y % 2 != 0 {
+            false => img.get_pixel(x, y).0[0],
+            true => img.get_pixel(img.width() - x - 1, y).0[0],
+        })
+    })
 }
