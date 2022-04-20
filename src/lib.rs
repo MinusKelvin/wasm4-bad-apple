@@ -64,7 +64,7 @@ fn update() {
 
 fn decode_frame(stream: &mut BitStream) -> Option<()> {
     if BPP == 1 {
-        undo_fxaa();
+        undo_smooth_filter();
     }
 
     let vertical = stream.read_one()?;
@@ -90,7 +90,7 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
     }
 
     if BPP == 1 {
-        apply_fxaa();
+        apply_smooth_filter();
     }
 
     Some(())
@@ -133,7 +133,7 @@ fn panic_handler(_: &core::panic::PanicInfo) -> ! {
     core::arch::wasm::unreachable()
 }
 
-fn undo_fxaa() {
+fn undo_smooth_filter() {
     unsafe {
         for b in (*wasm4::FRAMEBUFFER).iter_mut() {
             *b &= 0b01010101;
@@ -141,7 +141,7 @@ fn undo_fxaa() {
     }
 }
 
-fn apply_fxaa() {
+fn apply_smooth_filter() {
     for y in 1..HEIGHT - 1 {
         for x in 1..WIDTH - 1 {
             do_fxaa(x * PIXEL_SIZE, y * PIXEL_SIZE, -1, -1);
