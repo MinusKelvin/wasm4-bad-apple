@@ -1,9 +1,9 @@
 #![no_std]
 #![cfg_attr(feature = "quiet", allow(warnings))]
 
+mod audio;
 mod bitstream;
 mod wasm4;
-mod audio;
 
 use core::mem::MaybeUninit;
 
@@ -33,8 +33,13 @@ fn start() {
         // Skip header
         stream.read_bits(24);
         // Load palette
+        let palette = &mut *wasm4::PALETTE;
         for i in 0..1 << BPP {
-            (*wasm4::PALETTE)[i] = stream.read_bits(24).unwrap();
+            palette[i] = stream.read_bits(24).unwrap();
+        }
+        if BPP == 1 {
+            palette[2] = (palette[0] * 2 + palette[1]) / 3;
+            palette[3] = (palette[0] + palette[1] * 2) / 3;
         }
         (*wasm4::FRAMEBUFFER).fill(0);
     }
@@ -58,6 +63,10 @@ fn update() {
 }
 
 fn decode_frame(stream: &mut BitStream) -> Option<()> {
+    if BPP == 1 {
+        undo_fxaa();
+    }
+
     let vertical = stream.read_one()?;
 
     let mut i = 0;
@@ -78,6 +87,10 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
             set(x, y, kind as u8);
             i += 1;
         }
+    }
+
+    if BPP == 1 {
+        apply_fxaa();
     }
 
     Some(())
@@ -118,4 +131,36 @@ fn locate(x: u32, y: u32) -> (usize, u32) {
 #[panic_handler]
 fn panic_handler(_: &core::panic::PanicInfo) -> ! {
     core::arch::wasm::unreachable()
+}
+
+fn undo_fxaa() {
+    unsafe {
+        for b in (*wasm4::FRAMEBUFFER).iter_mut() {
+            *b &= 0b01010101;
+        }
+    }
+}
+
+fn apply_fxaa() {
+    for y in 1..HEIGHT - 1 {
+        for x in 1..WIDTH - 1 {
+            do_fxaa(x * PIXEL_SIZE, y * PIXEL_SIZE, -1, -1);
+            do_fxaa((x + 1) * PIXEL_SIZE - 1, y * PIXEL_SIZE, 1, -1);
+            do_fxaa(x * PIXEL_SIZE, (y + 1) * PIXEL_SIZE - 1, -1, 1);
+            do_fxaa((x + 1) * PIXEL_SIZE - 1, (y + 1) * PIXEL_SIZE - 1, 1, 1);
+        }
+    }
+}
+
+fn do_fxaa(x: u32, y: u32, dx: i32, dy: i32) {
+    let (i, s) = locate(x, y);
+    let (ix, sx) = locate((x as i32 + dx) as u32, y);
+    let (iy, sy) = locate(x, (y as i32 + dy) as u32);
+    let fb = unsafe { &mut *wasm4::FRAMEBUFFER };
+    let v = fb[i] >> s & 1;
+    let vx = fb[ix] >> sx & 1;
+    let vy = fb[iy] >> sy & 1;
+    if vx == vy && v != vx {
+        fb[i] ^= 0b10 << s;
+    }
 }
