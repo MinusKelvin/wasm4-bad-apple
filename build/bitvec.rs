@@ -41,6 +41,9 @@ impl BitVec {
     }
 
     pub fn write_int(&mut self, v: u32) {
+        #[cfg(feature = "use-elias-gamma")]
+        self.write_elias_gamma(v);
+        #[cfg(not(feature = "use-elias-gamma"))]
         self.write_elias_delta(v);
     }
 

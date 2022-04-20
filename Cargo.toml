@@ -11,6 +11,9 @@ crate-type = ["cdylib"]
 [dependencies]
 arrayvec = { version = "0.7.2", default-features = false }
 
+[features]
+use-elias-gamma = []
+
 [profile.release]
 opt-level = "z"
 lto = true

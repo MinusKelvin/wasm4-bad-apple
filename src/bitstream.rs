@@ -54,6 +54,9 @@ impl BitStream {
     }
 
     pub fn read_int(&mut self) -> Option<u32> {
-        self.read_elias_delta()
+        #[cfg(feature = "use-elias-gamma")]
+        return self.read_elias_gamma();
+        #[cfg(not(feature = "use-elias-gamma"))]
+        return self.read_elias_delta();
     }
 }

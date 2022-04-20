@@ -13,9 +13,9 @@ use crate::bitvec::BitVec;
 
 mod bitvec;
 
-const FRAMERATE: u32 = 30;
-const RESCALE_WIDTH: u32 = 80;
-const RESCALE_HEIGHT: u32 = 60;
+const FRAMERATE: u32 = 8;
+const RESCALE_WIDTH: u32 = 32;
+const RESCALE_HEIGHT: u32 = 24;
 const PALETTE: &[Rgb<u8>] = &[
     // Rgb([0x23, 0x0b, 0x03]),
     // Rgb([0xa2, 0x2e, 0x0d]),
@@ -81,7 +81,7 @@ fn main() {
                     &img.to_rgb8(),
                     RESCALE_WIDTH,
                     RESCALE_HEIGHT,
-                    imageops::FilterType::Nearest,
+                    imageops::FilterType::Gaussian,
                 );
                 imageops::index_colors(&smol, &Palette)
             }),

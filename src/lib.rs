@@ -38,8 +38,8 @@ fn start() {
             palette[i] = stream.read_bits(24).unwrap();
         }
         if BPP == 1 {
-            palette[2] = (palette[0] * 2 + palette[1]) / 3;
-            palette[3] = (palette[0] + palette[1] * 2) / 3;
+            palette[3] = (palette[0] * 2 + palette[1]) / 3;
+            palette[2] = (palette[0] + palette[1] * 2) / 3;
         }
         (*wasm4::FRAMEBUFFER).fill(0);
     }
@@ -142,17 +142,41 @@ fn undo_smooth_filter() {
 }
 
 fn apply_smooth_filter() {
-    for y in 1..HEIGHT - 1 {
-        for x in 1..WIDTH - 1 {
-            do_fxaa(x * PIXEL_SIZE, y * PIXEL_SIZE, -1, -1);
-            do_fxaa((x + 1) * PIXEL_SIZE - 1, y * PIXEL_SIZE, 1, -1);
-            do_fxaa(x * PIXEL_SIZE, (y + 1) * PIXEL_SIZE - 1, -1, 1);
-            do_fxaa((x + 1) * PIXEL_SIZE - 1, (y + 1) * PIXEL_SIZE - 1, 1, 1);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            if x != 0 && y != 0 {
+                do_smooth(x * PIXEL_SIZE, y * PIXEL_SIZE, -1, -1);
+                if PIXEL_SIZE > 3 {
+                    do_smooth(x * PIXEL_SIZE + 1, y * PIXEL_SIZE, -2, -1);
+                    do_smooth(x * PIXEL_SIZE, y * PIXEL_SIZE + 1, -1, -2);
+                }
+            }
+            if x != WIDTH - 1 && y != 0 {
+                do_smooth((x + 1) * PIXEL_SIZE - 1, y * PIXEL_SIZE, 1, -1);
+                if PIXEL_SIZE > 3 {
+                    do_smooth((x + 1) * PIXEL_SIZE - 1 - 1, y * PIXEL_SIZE, 2, -1);
+                    do_smooth((x + 1) * PIXEL_SIZE - 1, y * PIXEL_SIZE + 1, 1, -2);
+                }
+            }
+            if x != 0 && y != HEIGHT - 1 {
+                do_smooth(x * PIXEL_SIZE, (y + 1) * PIXEL_SIZE - 1, -1, 1);
+                if PIXEL_SIZE > 3 {
+                    do_smooth(x * PIXEL_SIZE + 1, (y + 1) * PIXEL_SIZE - 1, -2, 1);
+                    do_smooth(x * PIXEL_SIZE, (y + 1) * PIXEL_SIZE - 1 - 1, -1, 2);
+                }
+            }
+            if x != WIDTH - 1 && y != HEIGHT - 1 {
+                do_smooth((x + 1) * PIXEL_SIZE - 1, (y + 1) * PIXEL_SIZE - 1, 1, 1);
+                if PIXEL_SIZE > 3 {
+                    do_smooth((x + 1) * PIXEL_SIZE - 1 - 1, (y + 1) * PIXEL_SIZE - 1, 2, 1);
+                    do_smooth((x + 1) * PIXEL_SIZE - 1, (y + 1) * PIXEL_SIZE - 1 - 1, 1, 2);
+                }
+            }
         }
     }
 }
 
-fn do_fxaa(x: u32, y: u32, dx: i32, dy: i32) {
+fn do_smooth(x: u32, y: u32, dx: i32, dy: i32) {
     let (i, s) = locate(x, y);
     let (ix, sx) = locate((x as i32 + dx) as u32, y);
     let (iy, sy) = locate(x, (y as i32 + dy) as u32);

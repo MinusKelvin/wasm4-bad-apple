@@ -5,8 +5,8 @@ target = "wasm32-unknown-unknown"
 rustflags = [
     # Import memory from WASM-4
     "-C", "link-arg=--import-memory",
-    "-C", "link-arg=--initial-memory=65536000",
-    "-C", "link-arg=--max-memory=65536000",
+    "-C", "link-arg=--initial-memory=65536",
+    "-C", "link-arg=--max-memory=65536",
 
     # Temporary workaround for #255 issue.
     # Reserve 8192 bytes of Rust stack space, offset from 6560.
