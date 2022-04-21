@@ -58,6 +58,14 @@ struct Run {
     extra_data: BitVec,
 }
 
+#[derive(Clone, Copy)]
+struct Rect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=frames/");
     println!("cargo:rerun-if-changed=audio.py");
@@ -70,13 +78,12 @@ fn main() {
         .last()
         .unwrap();
 
+    println!("cargo:warning=Frames {}", last_frame);
+
     let images = (0..=last_frame)
         .into_par_iter()
         .map(|i| match i {
-            0 => Ok((
-                GrayImage::new(RESCALE_WIDTH, RESCALE_HEIGHT),
-                GrayImage::new(RESCALE_HEIGHT, RESCALE_WIDTH),
-            )),
+            0 => Ok(GrayImage::new(RESCALE_WIDTH, RESCALE_HEIGHT)),
             _ => image::open(format!("frames/{}.png", i * 30 / FRAMERATE + START_OFFSET)).map(
                 |img| {
                     let smol = imageops::resize(
@@ -85,14 +92,7 @@ fn main() {
                         RESCALE_HEIGHT,
                         DOWNSCALE_FILTER,
                     );
-                    let base = imageops::index_colors(&smol, &Palette);
-                    let mut transposed = GrayImage::new(base.height(), base.width());
-                    for y in 0..transposed.height() {
-                        for x in 0..transposed.width() {
-                            transposed.put_pixel(x, y, *base.get_pixel(y, x));
-                        }
-                    }
-                    (base, transposed)
+                    imageops::index_colors(&smol, &Palette)
                 },
             ),
         })
@@ -102,13 +102,19 @@ fn main() {
     let data: Vec<_> = images
         .par_windows(2)
         .map(|v| {
-            let (prev_h, prev_v) = &v[0];
-            let (curr_h, curr_v) = &v[1];
+            let prev = &v[0];
+            let curr = &v[1];
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                w: curr.width(),
+                h: curr.height(),
+            };
             [
-                encode(value_sets(scanline(curr_h), scanline(prev_h))),
-                encode(value_sets(scanline(curr_v), scanline(prev_v))),
-                encode(value_sets(snake(curr_h), snake(prev_h))),
-                encode(value_sets(snake(curr_v), snake(prev_v))),
+                encode(value_sets(curr, prev, scanline(rect))),
+                encode(value_sets(curr, prev, transpose(scanline, rect))),
+                encode(value_sets(curr, prev, snake(rect))),
+                encode(value_sets(curr, prev, transpose(snake, rect))),
             ]
             .into_iter()
             .enumerate()
@@ -147,7 +153,7 @@ fn main() {
 
     println!("cargo:warning=Orderings {:?}", orderings);
     println!("cargo:warning=Kinds {:?}", kinds);
-    println!("cargo:warning=Lengths {:?}", lengths);
+    println!("cargo:warning=Movie length {}", (movie.len() + 7) / 8);
 
     movie
         .dump(BufWriter::new(
@@ -211,24 +217,40 @@ fn encode(mut value_sets: impl Iterator<Item = u8>) -> Vec<Run> {
     data
 }
 
-fn value_sets(
-    current: impl Iterator<Item = u8>,
-    previous: impl Iterator<Item = u8>,
-) -> impl Iterator<Item = u8> {
-    current
-        .zip(previous)
-        .map(|(c, p)| 1 << c | ((c == p) as u8) << UNCHANGED_BIT)
+fn value_sets<'a>(
+    current: &'a GrayImage,
+    previous: &'a GrayImage,
+    order: impl Iterator<Item = (u32, u32)> + 'a,
+) -> impl Iterator<Item = u8> + 'a {
+    order.map(move |(x, y)| {
+        let c = current.get_pixel(x, y).0[0];
+        let p = previous.get_pixel(x, y).0[0];
+        1 << c | ((c == p) as u8) << UNCHANGED_BIT
+    })
 }
 
-fn scanline(img: &GrayImage) -> impl Iterator<Item = u8> + '_ {
-    img.pixels().map(|p| p.0[0])
+fn scanline(rect: Rect) -> impl Iterator<Item = (u32, u32)> {
+    (rect.y..rect.y + rect.h).flat_map(move |y| (rect.x..rect.x + rect.w).map(move |x| (x, y)))
 }
 
-fn snake(img: &GrayImage) -> impl Iterator<Item = u8> + '_ {
-    (0..img.height()).flat_map(move |y| {
-        (0..img.width()).map(move |x| match y % 2 != 0 {
-            false => img.get_pixel(x, y).0[0],
-            true => img.get_pixel(img.width() - x - 1, y).0[0],
+fn snake(rect: Rect) -> impl Iterator<Item = (u32, u32)> {
+    (rect.y..rect.y + rect.h).flat_map(move |y| {
+        (0..rect.w).map(move |dx| match y % 2 != 0 {
+            false => (rect.x + dx, y),
+            true => (rect.x + rect.w - dx - 1, y),
         })
     })
+}
+
+fn transpose<I: Iterator<Item = (u32, u32)>>(
+    orderer: impl Fn(Rect) -> I,
+    rect: Rect,
+) -> impl Iterator<Item = (u32, u32)> {
+    orderer(Rect {
+        x: rect.y,
+        y: rect.x,
+        w: rect.h,
+        h: rect.w,
+    })
+    .map(|(y, x)| (x, y))
 }
