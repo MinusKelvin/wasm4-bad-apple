@@ -21,7 +21,7 @@ impl Program {
                     delta_bits: 4,
                     deltas: &[0, 6, 7, 13, 14, 26, 27, 2541, 2960],
                     length_bits: 0,
-                    lengths: &[1],
+                    lengths: &[2],
                     pitch_bits: 0,
                     pitches: &[165],
                 },
