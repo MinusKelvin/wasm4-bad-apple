@@ -14,6 +14,7 @@ const MOVIE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/movie.bin"));
 const FRAMERATE: u32 = MOVIE[0] as u32;
 const WIDTH: u32 = MOVIE[1] as u32;
 const HEIGHT: u32 = MOVIE[2] as u32;
+const FRAME_SIZE: u32 = WIDTH * HEIGHT;
 const BPP: u8 = 1;
 
 const PIXEL_SIZE: u32 = match (160 / WIDTH, 160 / HEIGHT) {
@@ -67,16 +68,34 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
         undo_smooth_filter();
     }
 
-    let order = stream.read_bits(2)?;
+    match stream.read_bits(3)? {
+        0 => decode_rle(stream, |i| scanline(i, WIDTH))?,
+        1 => decode_rle(stream, |i| transpose(scanline(i, HEIGHT)))?,
+        2 => decode_rle(stream, |i| snake(i, WIDTH))?,
+        3 => decode_rle(stream, |i| transpose(snake(i, HEIGHT)))?,
+        4 => decode_lz77(stream, |i| scanline(i, WIDTH))?,
+        5 => decode_lz77(stream, |i| transpose(scanline(i, HEIGHT)))?,
+        6 => decode_lz77(stream, |i| snake(i, WIDTH))?,
+        7 => decode_lz77(stream, |i| transpose(snake(i, HEIGHT)))?,
+        _ => unreachable!(),
+    }
 
+    if BPP == 1 {
+        apply_smooth_filter();
+    }
+
+    Some(())
+}
+
+fn decode_rle(stream: &mut BitStream, to_xy: fn(u32) -> (u32, u32)) -> Option<()> {
     let mut i = 0;
-    while i < WIDTH * HEIGHT {
+    while i < FRAME_SIZE {
         let kind = stream.read_bits(BPP + 1)?;
 
         if kind > 1 << BPP {
             let length = kind - (1 << BPP) + 1;
             for _ in 0..length {
-                let (x, y) = get_xy(i, order, WIDTH, HEIGHT);
+                let (x, y) = to_xy(i);
                 set(x, y, stream.read_bits(BPP)? as u8);
                 i += 1;
             }
@@ -84,17 +103,34 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
             i += stream.read_int()?;
         } else {
             for _ in 0..stream.read_int()? {
-                let (x, y) = get_xy(i, order, WIDTH, HEIGHT);
+                let (x, y) = to_xy(i);
                 set(x, y, kind as u8);
                 i += 1;
             }
         }
     }
+    Some(())
+}
 
-    if BPP == 1 {
-        apply_smooth_filter();
+fn decode_lz77(stream: &mut BitStream, to_xy: impl Fn(u32) -> (u32, u32)) -> Option<()> {
+    let mut i = 0;
+    while i < FRAME_SIZE {
+        let back = stream.read_int()? - 1;
+        let length = stream.read_int()?;
+        for _ in 0..length {
+            let (x, y) = to_xy(i);
+            let v = match back != 0 {
+                true => {
+                    let read_i = (i + FRAME_SIZE - back) % FRAME_SIZE;
+                    let (rx, ry) = to_xy(read_i);
+                    get(rx, ry)
+                }
+                false => stream.read_bits(BPP)? as u8,
+            };
+            set(x, y, v);
+            i += 1;
+        }
     }
-
     Some(())
 }
 
@@ -110,14 +146,10 @@ fn set(x: u32, y: u32, v: u8) {
     }
 }
 
-fn xor(x: u32, y: u32, v: u8) {
+fn get(x: u32, y: u32) -> u8 {
     unsafe {
-        for x in x * PIXEL_SIZE..(x + 1) * PIXEL_SIZE {
-            for y in y * PIXEL_SIZE..(y + 1) * PIXEL_SIZE {
-                let (i, s) = locate(x, y);
-                (*wasm4::FRAMEBUFFER)[i] ^= v << s;
-            }
-        }
+        let (i, s) = locate(x * PIXEL_SIZE, y * PIXEL_SIZE);
+        (*wasm4::FRAMEBUFFER)[i] >> s & 0b11
     }
 }
 
@@ -130,23 +162,21 @@ fn locate(x: u32, y: u32) -> (usize, u32) {
     (pixel_byte as usize, pixel_shift)
 }
 
-fn get_xy(i: u32, order: u32, w: u32, h: u32) -> (u32, u32) {
-    if order & 1 == 1 {
-        let (y, x) = get_xy(i, order & !1, h, w);
-        return (x, y);
+fn scanline(i: u32, width: u32) -> (u32, u32) {
+    (i % width, i / width)
+}
+
+fn snake(i: u32, width: u32) -> (u32, u32) {
+    let y = i / width;
+    let x = i % width;
+    match y % 2 != 0 {
+        false => (x, y),
+        true => (width - x - 1, y),
     }
-    match order {
-        0 => (i % w, i / w),
-        2 => {
-            let y = i / w;
-            let x = i % w;
-            match y % 2 != 0 {
-                false => (x, y),
-                true => (w - x - 1, y),
-            }
-        }
-        _ => unreachable!()
-    }
+}
+
+fn transpose((y, x): (u32, u32)) -> (u32, u32) {
+    (x, y)
 }
 
 #[panic_handler]

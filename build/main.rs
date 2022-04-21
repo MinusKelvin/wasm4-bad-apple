@@ -13,10 +13,15 @@ use crate::bitvec::BitVec;
 
 mod bitvec;
 
-const FRAMERATE: u32 = 6;
+const FRAMERATE: u32 = 10;
 const RESCALE_WIDTH: u32 = 40;
 const RESCALE_HEIGHT: u32 = 30;
-const PALETTE: &[Rgb<u8>] = &[Rgb([0x00; 3]), Rgb([0xFF; 3])];
+const PALETTE: &[Rgb<u8>] = &[
+    Rgb([0x00; 3]),
+    // Rgb([0x55; 3]),
+    // Rgb([0xAA; 3]),
+    Rgb([0xFF; 3]),
+];
 const START_OFFSET: u32 = 30;
 const MAX_FRAMES: u32 = u32::MAX;
 const DOWNSCALE_FILTER: FilterType = FilterType::Gaussian;
@@ -70,6 +75,8 @@ fn main() {
         .last()
         .unwrap();
 
+    println!("cargo:warning={last_frame} frames");
+
     let images = (0..=last_frame)
         .into_par_iter()
         .map(|i| match i {
@@ -109,6 +116,10 @@ fn main() {
                 encode(value_sets(scanline(curr_v), scanline(prev_v))),
                 encode(value_sets(snake(curr_h), snake(prev_h))),
                 encode(value_sets(snake(curr_v), snake(prev_v))),
+                lz77(scanline(prev_h).chain(scanline(curr_h))),
+                lz77(scanline(prev_v).chain(scanline(curr_v))),
+                lz77(snake(prev_h).chain(snake(curr_h))),
+                lz77(snake(prev_v).chain(snake(curr_v))),
             ]
             .into_iter()
             .enumerate()
@@ -127,27 +138,15 @@ fn main() {
         }
     }
 
-    let mut orderings = [0; 4];
-    let mut kinds = [0; 8];
-    let mut lengths = [0; (RESCALE_WIDTH * RESCALE_HEIGHT) as usize];
-    for (order, runs) in data {
-        movie.write_bits(order as u32, 2);
-        orderings[order as usize] += 1;
-        for run in runs {
-            movie.write_bits(run.kind as u32, BPP + 1);
-            if run.kind > UNCHANGED_BIT as u8 {
-                movie.append(run.extra_data);
-            } else {
-                movie.write_int(run.length);
-                lengths[run.length as usize - 1] += 1;
-            }
-            kinds[run.kind as usize] += 1;
-        }
+    let mut frame_variants = [0; 8];
+    for (variant, frame) in data {
+        movie.write_bits(variant as u32, 3);
+        movie.append(frame);
+        frame_variants[variant as usize] += 1;
     }
 
-    println!("cargo:warning=Orderings {:?}", orderings);
-    println!("cargo:warning=Kinds {:?}", kinds);
-    println!("cargo:warning=Lengths {:?}", lengths);
+    println!("cargo:warning=Frame variants {:?}", frame_variants);
+    println!("cargo:warning=Movie size: {}", (movie.len() + 7) / 8);
 
     movie
         .dump(BufWriter::new(
@@ -158,7 +157,7 @@ fn main() {
     assert!(Command::new("./audio.py").status().unwrap().success());
 }
 
-fn encode(mut value_sets: impl Iterator<Item = u8>) -> Vec<Run> {
+fn encode(mut value_sets: impl Iterator<Item = u8>) -> BitVec {
     let mut data = vec![];
 
     let mut length = 1;
@@ -208,7 +207,17 @@ fn encode(mut value_sets: impl Iterator<Item = u8>) -> Vec<Run> {
         false
     });
 
-    data
+    let mut encoded = BitVec::new();
+    for run in data {
+        encoded.write_bits(run.kind as u32, BPP + 1);
+        if run.kind > UNCHANGED_BIT as u8 {
+            encoded.append(run.extra_data);
+        } else {
+            encoded.write_int(run.length);
+        }
+    }
+
+    encoded
 }
 
 fn value_sets(
@@ -231,4 +240,73 @@ fn snake(img: &GrayImage) -> impl Iterator<Item = u8> + '_ {
             true => img.get_pixel(img.width() - x - 1, y).0[0],
         })
     })
+}
+
+fn lz77(pixels: impl Iterator<Item = u8>) -> BitVec {
+    let pixels: Vec<_> = pixels.collect();
+    let frame_length = pixels.len() / 2;
+    let mut parts = vec![];
+    let mut i = pixels.len() / 2;
+
+    while i < pixels.len() {
+        let (length, backwards) = find_longest_match(&pixels[i - frame_length..], frame_length);
+        if backwards != 0 {
+            let mut backref = BitVec::new();
+            backref.write_int(backwards as u32 + 1);
+            backref.write_int(length as u32);
+            let mut raw = BitVec::new();
+            raw.write_int(1);
+            raw.write_int(length as u32);
+            for &v in &pixels[i..i + length] {
+                raw.write_bits(v as u32, BPP);
+            }
+            if backref.len() < raw.len() {
+                parts.push(Ok(backref));
+                i += length;
+                continue;
+            }
+        }
+
+        parts.push(Err(vec![pixels[i]]));
+        i += 1;
+    }
+
+    parts.dedup_by(|next, curr| match (next, curr) {
+        (Err(next), Err(current)) => {
+            current.append(next);
+            true
+        }
+        _ => false,
+    });
+
+    let mut encoded = BitVec::new();
+    for part in parts {
+        match part {
+            Ok(backref) => encoded.append(backref),
+            Err(pixels) => {
+                encoded.write_int(1);
+                encoded.write_int(pixels.len() as u32);
+                for pixel in pixels {
+                    encoded.write_bits(pixel as u32, BPP);
+                }
+            }
+        }
+    }
+
+    encoded
+}
+
+fn find_longest_match(data: &[u8], at: usize) -> (usize, usize) {
+    let mut longest_match = (0, 0);
+    for i in (0..at).rev() {
+        let length = data[i..]
+            .iter()
+            .zip(data[at..].iter())
+            .take_while(|(&a, &b)| a == b)
+            .count();
+        if length > longest_match.0 {
+            longest_match = (length, at - i);
+        }
+    }
+    longest_match
 }
