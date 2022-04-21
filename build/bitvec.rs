@@ -1,5 +1,17 @@
 use std::io::Write;
 
+const FIBONACCI: [u32; 46] = {
+    let mut numbers = [0; 46];
+    numbers[0] = 1;
+    numbers[1] = 2;
+    let mut i = 2;
+    while i < numbers.len() {
+        numbers[i] = numbers[i - 2] + numbers[i - 1];
+        i += 1;
+    }
+    numbers
+};
+
 pub struct BitVec {
     data: Vec<bool>, // lol
 }
@@ -19,32 +31,26 @@ impl BitVec {
         }
     }
 
-    fn write_unary(&mut self, v: u32) {
-        for _ in 0..v {
-            self.write(false);
+    fn write_fibonacci(&mut self, mut v: u32) {
+        assert_ne!(v, 0);
+        let start = self.data.len();
+        let i = match FIBONACCI.binary_search(&v) {
+            Ok(i) => i + 1,
+            Err(i) => i,
+        };
+        for &num in FIBONACCI[..i].iter().rev() {
+            self.write(v >= num);
+            if v >= num {
+                v -= num;
+            }
         }
+        self.data[start..].reverse();
+        // terminator
         self.write(true);
     }
 
-    fn write_elias_gamma(&mut self, v: u32) {
-        assert_ne!(v, 0);
-        let n = (v + 1).next_power_of_two().trailing_zeros() - 1;
-        self.write_unary(n);
-        self.write_bits(v, n);
-    }
-
-    fn write_elias_delta(&mut self, v: u32) {
-        assert_ne!(v, 0);
-        let n = (v + 1).next_power_of_two().trailing_zeros() - 1;
-        self.write_elias_gamma(n + 1);
-        self.write_bits(v, n);
-    }
-
     pub fn write_int(&mut self, v: u32) {
-        #[cfg(feature = "use-elias-gamma")]
-        self.write_elias_gamma(v);
-        #[cfg(not(feature = "use-elias-gamma"))]
-        self.write_elias_delta(v);
+        self.write_fibonacci(v);
     }
 
     pub fn len(&self) -> usize {

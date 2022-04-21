@@ -33,30 +33,27 @@ impl BitStream {
         Some(result)
     }
 
-    fn read_unary(&mut self) -> Option<u32> {
+    fn read_fibonacci(&mut self) -> Option<u32> {
         let mut v = 0;
-        while !self.read_one()? {
-            v += 1
+        let mut a = 1;
+        let mut b = 2;
+        let mut prev = false;
+        loop {
+            let next = self.read_one()?;
+            if next {
+                if prev {
+                    return Some(v);
+                }
+                v += a;
+            }
+            let c = a + b;
+            a = b;
+            b = c;
+            prev = next;
         }
-        Some(v)
-    }
-
-    fn read_elias_gamma(&mut self) -> Option<u32> {
-        let l = self.read_unary()? as u8;
-        let v = self.read_bits(l)?;
-        Some(v | 1 << l)
-    }
-
-    fn read_elias_delta(&mut self) -> Option<u32> {
-        let l = self.read_elias_gamma()? as u8 - 1;
-        let v = self.read_bits(l)?;
-        Some(v | 1 << l)
     }
 
     pub fn read_int(&mut self) -> Option<u32> {
-        #[cfg(feature = "use-elias-gamma")]
-        return self.read_elias_gamma();
-        #[cfg(not(feature = "use-elias-gamma"))]
-        return self.read_elias_delta();
+        self.read_fibonacci()
     }
 }
