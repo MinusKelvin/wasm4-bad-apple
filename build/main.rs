@@ -4,7 +4,7 @@ use std::io::BufWriter;
 use std::path::Path;
 use std::process::Command;
 
-use image::imageops::ColorMap;
+use image::imageops::{ColorMap, FilterType};
 use image::{imageops, GrayImage, Rgb};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
@@ -13,19 +13,14 @@ use crate::bitvec::BitVec;
 
 mod bitvec;
 
-const FRAMERATE: u32 = 8;
-const RESCALE_WIDTH: u32 = 32;
-const RESCALE_HEIGHT: u32 = 24;
-const PALETTE: &[Rgb<u8>] = &[
-    // Rgb([0x23, 0x0b, 0x03]),
-    // Rgb([0xa2, 0x2e, 0x0d]),
-    // Rgb([0xe2, 0x62, 0x30]),
-    // Rgb([0xfe, 0xff, 0x90]),
-    Rgb([0x00; 3]),
-    // Rgb([0x55; 3]),
-    // Rgb([0xAA; 3]),
-    Rgb([0xFF; 3]),
-];
+const FRAMERATE: u32 = 6;
+const RESCALE_WIDTH: u32 = 40;
+const RESCALE_HEIGHT: u32 = 30;
+const PALETTE: &[Rgb<u8>] = &[Rgb([0x00; 3]), Rgb([0xFF; 3])];
+const START_OFFSET: u32 = 30;
+const MAX_FRAMES: u32 = u32::MAX;
+const DOWNSCALE_FILTER: FilterType = FilterType::Gaussian;
+
 const BPP: u32 = PALETTE.len().trailing_zeros();
 const UNCHANGED_BIT: u32 = 1 << BPP;
 
@@ -68,8 +63,10 @@ fn main() {
     println!("cargo:rerun-if-changed=audio.py");
     println!("cargo:rerun-if-changed=music.mid");
 
-    let last_frame = (1..)
-        .take_while(|&i| Path::new(&format!("frames/{}.png", i * 30 / FRAMERATE + 31)).is_file())
+    let last_frame = (1..=MAX_FRAMES)
+        .take_while(|&i| {
+            Path::new(&format!("frames/{}.png", i * 30 / FRAMERATE + START_OFFSET)).is_file()
+        })
         .last()
         .unwrap();
 
@@ -80,22 +77,24 @@ fn main() {
                 GrayImage::new(RESCALE_WIDTH, RESCALE_HEIGHT),
                 GrayImage::new(RESCALE_HEIGHT, RESCALE_WIDTH),
             )),
-            _ => image::open(format!("frames/{}.png", i * 30 / FRAMERATE + 31)).map(|img| {
-                let smol = imageops::resize(
-                    &img.to_rgb8(),
-                    RESCALE_WIDTH,
-                    RESCALE_HEIGHT,
-                    imageops::FilterType::Gaussian,
-                );
-                let base = imageops::index_colors(&smol, &Palette);
-                let mut transposed = GrayImage::new(base.height(), base.width());
-                for y in 0..transposed.height() {
-                    for x in 0..transposed.width() {
-                        transposed.put_pixel(x, y, *base.get_pixel(y, x));
+            _ => image::open(format!("frames/{}.png", i * 30 / FRAMERATE + START_OFFSET)).map(
+                |img| {
+                    let smol = imageops::resize(
+                        &img.to_rgb8(),
+                        RESCALE_WIDTH,
+                        RESCALE_HEIGHT,
+                        DOWNSCALE_FILTER,
+                    );
+                    let base = imageops::index_colors(&smol, &Palette);
+                    let mut transposed = GrayImage::new(base.height(), base.width());
+                    for y in 0..transposed.height() {
+                        for x in 0..transposed.width() {
+                            transposed.put_pixel(x, y, *base.get_pixel(y, x));
+                        }
                     }
-                }
-                (base, transposed)
-            }),
+                    (base, transposed)
+                },
+            ),
         })
         .collect::<Result<Vec<_>, _>>()
         .unwrap();

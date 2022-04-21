@@ -1,13 +1,28 @@
 # w4-bad-apple
 
-A game written in Rust for the [WASM-4](https://wasm4.org) fantasy console.
+Bad Apple!! music video on the [WASM-4](https://wasm4.org) fantasy console.
 
 ## Building
+
+First, you need to create a `frames` directory containing an image for each frame
+of the video. It's a lot of data, so I don't include it in the repository. To
+get the frames for Bad Apple!!:
+
+```shell
+mkdir frames
+youtube-dl UkgK8eUdpAo
+ffmpeg -i '<the file>' frames/%d.png
+```
+
+The music file for Bad Apple!! is included in the repository because it's small,
+not easily available anywhere, and the music system included here is rather
+specialized and probably won't work with other MIDI files. Thanks to
+@analog-hors for implementing it!
 
 Build the cart by running:
 
 ```shell
-cargo build --release
+cargo --release --features use-elias-gamma
 ```
 
 Then run it with:
@@ -16,11 +31,23 @@ Then run it with:
 w4 run target/wasm32-unknown-unknown/release/cart.wasm
 ```
 
-For more info about setting up WASM-4, see the [quickstart guide](https://wasm4.org/docs/getting-started/setup?code-lang=rust#quickstart).
+You can run cargo with `+nightly -Z build-std=core -Z build-std-features=panic_immediate_abort`
+and run the cart through `wasm-opt -Oz -c` to get a smaller cart, but it doesn't
+affect addressable memory usage and so won't help if the video is too big.
 
-## Links
+## Customizing
 
-- [Documentation](https://wasm4.org/docs): Learn more about WASM-4.
-- [Snake Tutorial](https://wasm4.org/docs/tutorials/snake/goal): Learn how to build a complete game
-  with a step-by-step tutorial.
-- [GitHub](https://github.com/aduros/wasm4): Submit an issue or PR. Contributions are welcome!
+Line 16 of `build/main.rs` contains a number of constants that can be used to
+adjust the quality of the resulting video, including frame size, downscale
+filter, framerate, and the video start frame and length. 4-color video can be
+encoded by putting four color in the palette and modifying `src/lib.rs` line 17
+to 2 BPP.
+
+If you try to encode a video that is too large, you will get a linker error
+saying the initial memory is too small. If this happens, you can modify the
+linker arguments in `.cargo/config.toml` to increase the available memory. Note
+however, that if you do this, the cart will require a modified wasm4 emulator.
+
+If the `--features use-elias-gamma` argument is not present when building, Elias
+delta coding will be used instead. This saves space with large frame sizes, but
+Elias gamma coding uses less space with smaller frame sizes.
