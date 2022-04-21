@@ -13,7 +13,7 @@ use crate::bitvec::BitVec;
 
 mod bitvec;
 
-const FRAMERATE: u32 = 6;
+const FRAMERATE: u32 = 7;
 const RESCALE_WIDTH: u32 = 40;
 const RESCALE_HEIGHT: u32 = 30;
 const PALETTE: &[Rgb<u8>] = &[Rgb([0x00; 3]), Rgb([0xFF; 3])];
