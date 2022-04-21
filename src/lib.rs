@@ -67,32 +67,47 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
         undo_smooth_filter();
     }
 
+    let mut i = -1;
+    for _ in 0..stream.read_int()? - 1 {
+        i += stream.read_int()? as i32;
+        let (x, y) = get_xy(i as u32, 0, WIDTH, HEIGHT);
+        let (tx, ty) = get_xy(i as u32 + stream.read_int()? - 1, 0, WIDTH, HEIGHT);
+        let w = tx - x + 1;
+        let h = ty - y + 1;
+
+        decode_rect(stream, x, y, w, h)?;
+    }
+
+    if BPP == 1 {
+        apply_smooth_filter();
+    }
+
+    Some(())
+}
+
+fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32 , h: u32) -> Option<()> {
     let order = stream.read_bits(2)?;
 
     let mut i = 0;
-    while i < WIDTH * HEIGHT {
+    while i < w * h {
         let kind = stream.read_bits(BPP + 1)?;
 
         if kind > 1 << BPP {
             let length = kind - (1 << BPP) + 1;
             for _ in 0..length {
-                let (x, y) = get_xy(i, order, WIDTH, HEIGHT);
-                set(x, y, stream.read_bits(BPP)? as u8);
+                let (dx, dy) = get_xy(i, order, w, h);
+                set(x + dx, y + dy, stream.read_bits(BPP)? as u8);
                 i += 1;
             }
         } else if kind == 1 << BPP {
             i += stream.read_int()?;
         } else {
             for _ in 0..stream.read_int()? {
-                let (x, y) = get_xy(i, order, WIDTH, HEIGHT);
-                set(x, y, kind as u8);
+                let (dx, dy) = get_xy(i, order, w, h);
+                set(x + dx, y + dy, kind as u8);
                 i += 1;
             }
         }
-    }
-
-    if BPP == 1 {
-        apply_smooth_filter();
     }
 
     Some(())
