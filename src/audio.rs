@@ -18,8 +18,8 @@ impl Program {
             noise: ChannelPlayer::new(
                 ChannelReader {
                     stream: BitStream::new(PULSE_2),
-                    delta_bits: 4,
-                    deltas: &[0, 6, 7, 13, 14, 26, 27, 2541, 2960],
+                    delta_bits: 3,
+                    deltas: &[0, 6, 7, 13, 14, 26, 27, 2541],
                     length_bits: 0,
                     lengths: &[2],
                     pitch_bits: 0,

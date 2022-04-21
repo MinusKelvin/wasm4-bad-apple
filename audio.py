@@ -56,7 +56,7 @@ for instrument, name in zip(midi_data.instruments, channels):
         length = lengths.index(length)
         pitch = pitches.index(pitch)
         if name == "noise":
-            stream.write(delta, 4)
+            stream.write(delta, 3)
         if name == "triangle":
             stream.write(delta, 4)
             stream.write(length, 3)
