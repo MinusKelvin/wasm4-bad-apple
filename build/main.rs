@@ -137,8 +137,10 @@ fn main() {
             movie.write_int(br - i);
             last_index = i as i32;
 
-            movie.write_bits(order as u32, 2);
-            orderings[order as usize] += 1;
+            if rect.h != 1 && rect.w != 1 {
+                movie.write_bits(order as u32, 2);
+                orderings[order as usize] += 1;
+            }
             for run in runs {
                 movie.write_bits(run.kind as u32, BPP + 1);
                 if run.kind > UNCHANGED_BIT as u8 {

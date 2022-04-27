@@ -85,8 +85,11 @@ fn decode_frame(stream: &mut BitStream) -> Option<()> {
     Some(())
 }
 
-fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32 , h: u32) -> Option<()> {
-    let order = stream.read_bits(2)?;
+fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32, h: u32) -> Option<()> {
+    let order = match w == 1 || h == 1 {
+        true => 0,
+        false => stream.read_bits(2)?,
+    };
 
     let mut i = 0;
     while i < w * h {
@@ -160,7 +163,7 @@ fn get_xy(i: u32, order: u32, w: u32, h: u32) -> (u32, u32) {
                 true => (w - x - 1, y),
             }
         }
-        _ => unreachable!()
+        _ => unreachable!(),
     }
 }
 
