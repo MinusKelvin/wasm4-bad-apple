@@ -16,6 +16,7 @@ enum Code<T> {
 
 struct FrequencyCode<T> {
     freq: u64,
+    count: usize,
     code: Code<T>,
 }
 
@@ -25,15 +26,20 @@ impl<T: Hash + Eq + Clone> HuffmanCode<T> {
             .into_iter()
             .map(|(v, freq)| FrequencyCode {
                 freq,
+                count: 1,
                 code: Code::Value(v),
             })
             .collect();
 
         while pqueue.len() > 1 {
-            let next_1 = pqueue.pop().unwrap();
-            let next_2 = pqueue.pop().unwrap();
+            let mut next_2 = pqueue.pop().unwrap();
+            let mut next_1 = pqueue.pop().unwrap();
+            if next_2.count < next_1.count {
+                std::mem::swap(&mut next_1, &mut next_2);
+            }
             pqueue.push(FrequencyCode {
                 freq: next_1.freq + next_2.freq,
+                count: next_1.count + next_2.count,
                 code: Code::Split(Box::new(next_1.code), Box::new(next_2.code)),
             });
         }

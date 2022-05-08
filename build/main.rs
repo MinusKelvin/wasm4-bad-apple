@@ -96,8 +96,6 @@ fn main() {
         .last()
         .unwrap();
 
-    println!("cargo:warning=Frames {}", last_frame);
-
     let images = (0..=last_frame)
         .into_par_iter()
         .map(|i| match i {
