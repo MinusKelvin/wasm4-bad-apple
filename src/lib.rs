@@ -11,9 +11,8 @@ use bitstream::BitStream;
 
 const MOVIE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/movie.bin"));
 
-const FRAMERATE: u32 = MOVIE[0] as u32;
-const WIDTH: u32 = MOVIE[1] as u32;
-const HEIGHT: u32 = MOVIE[2] as u32;
+const WIDTH: u32 = MOVIE[0] as u32;
+const HEIGHT: u32 = MOVIE[1] as u32;
 const BPP: u8 = 1;
 
 const PIXEL_SIZE: u32 = match (160 / WIDTH, 160 / HEIGHT) {
@@ -28,10 +27,10 @@ fn start() {
     unsafe {
         *wasm4::SYSTEM_FLAGS =
             wasm4::SYSTEM_PRESERVE_FRAMEBUFFER | wasm4::SYSTEM_HIDE_GAMEPAD_OVERLAY;
-        STATE = MaybeUninit::new((BitStream::new(MOVIE), 0, audio::Program::new()));
+        STATE = MaybeUninit::new((BitStream::new(MOVIE), 1, audio::Program::new()));
         let stream = &mut STATE.assume_init_mut().0;
         // Skip header
-        stream.read_bits(24);
+        stream.read_bits(16);
         // Load palette
         let palette = &mut *wasm4::PALETTE;
         for i in 0..1 << BPP {
@@ -49,14 +48,16 @@ fn start() {
 fn update() {
     let state = unsafe { STATE.assume_init_mut() };
 
-    state.1 += FRAMERATE;
-
-    while state.1 >= 60 {
-        state.1 -= 60;
-        if decode_frame(&mut state.0).is_none() {
-            start();
+    if state.1 - 1 == 0 {
+        if let Some(frametime) = state.0.read_int() {
+            state.1 = frametime * 2;
             decode_frame(&mut state.0);
+        } else {
+            start();
+            return;
         }
+    } else {
+        state.1 -= 1;
     }
 
     state.2.update();

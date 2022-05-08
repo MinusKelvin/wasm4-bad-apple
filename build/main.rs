@@ -6,14 +6,14 @@ use std::process::Command;
 
 use image::imageops::{ColorMap, FilterType};
 use image::{imageops, GrayImage, Rgb};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use rayon::slice::ParallelSlice;
+use rayon::prelude::*;
 
 use crate::bitvec::BitVec;
 
 mod bitvec;
 
-const FRAMERATE: u32 = 7;
+const MAX_LOSS: usize = 220;
+const MAX_FRAME_GAP: usize = 6;
 const RESCALE_WIDTH: u32 = 40;
 const RESCALE_HEIGHT: u32 = 30;
 const PALETTE: &[Rgb<u8>] = &[Rgb([0x00; 3]), Rgb([0xFF; 3])];
@@ -83,18 +83,16 @@ fn main() {
 
     let last_frame = (1..=MAX_FRAMES)
         .take_while(|&i| {
-            Path::new(&format!("frames/{}.png", i * 30 / FRAMERATE + START_OFFSET)).is_file()
+            Path::new(&format!("frames/{}.png", i + START_OFFSET)).is_file()
         })
         .last()
         .unwrap();
-
-    println!("cargo:warning=Frames {}", last_frame);
 
     let images = (0..=last_frame)
         .into_par_iter()
         .map(|i| match i {
             0 => Ok(GrayImage::new(RESCALE_WIDTH, RESCALE_HEIGHT)),
-            _ => image::open(format!("frames/{}.png", i * 30 / FRAMERATE + START_OFFSET)).map(
+            _ => image::open(format!("frames/{}.png", i + START_OFFSET)).map(
                 |img| {
                     let smol = imageops::resize(
                         &img.to_rgb8(),
@@ -109,13 +107,42 @@ fn main() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
 
+    let losses: Vec<_> = images
+        .par_windows(2)
+        .map(|v| {
+            v[0].pixels()
+                .zip(v[1].pixels())
+                .filter(|(a, b)| a != b)
+                .count()
+        })
+        .collect();
+
+    let mut images_with_losses: Vec<_> = images
+        .into_iter()
+        .enumerate()
+        .zip(std::iter::once(0).chain(losses.into_iter()))
+        .collect();
+
+    images_with_losses.dedup_by(
+        |((i, _), extra_loss), ((j, _), loss)| {
+            if *loss + *extra_loss <= MAX_LOSS && *i - *j < MAX_FRAME_GAP {
+                *loss += *extra_loss;
+                true
+            } else {
+                *extra_loss = 0;
+                false
+            }
+        },
+    );
+
+    let images: Vec<_> = images_with_losses.into_iter().map(|(i, _)| i).collect();
+
     let data: Vec<_> = images
         .par_windows(2)
-        .map(|v| encode_frame(&v[1], &v[0]))
+        .map(|v| (v[1].0 - v[0].0, encode_frame(&v[1].1, &v[0].1)))
         .collect();
 
     let mut movie = BitVec::new();
-    movie.write_bits(FRAMERATE, 8);
     movie.write_bits(RESCALE_WIDTH, 8);
     movie.write_bits(RESCALE_HEIGHT, 8);
     for color in PALETTE {
@@ -124,10 +151,15 @@ fn main() {
         }
     }
 
+    println!("cargo:warning=Frames {}", data.len() - 1);
+
     let mut orderings = [0; 4];
     let mut kinds = [0; 8];
     let mut lengths = [0; (RESCALE_WIDTH * RESCALE_HEIGHT) as usize];
-    for rects in data {
+    let mut gaps = [0; MAX_FRAME_GAP];
+    for (gap, rects) in data {
+        gaps[gap as usize - 1] += 1;
+        movie.write_int(gap as u32);
         movie.write_int(rects.len() as u32 + 1);
         let mut last_index = -1;
         for (rect, order, runs) in rects {
@@ -156,6 +188,7 @@ fn main() {
 
     println!("cargo:warning=Orderings {:?}", orderings);
     println!("cargo:warning=Kinds {:?}", kinds);
+    println!("cargo:warning=Gaps {:?}", gaps);
     println!("cargo:warning=Movie length {}", (movie.len() + 7) / 8);
 
     movie
