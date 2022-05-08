@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -10,13 +11,20 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
 
 use crate::bitvec::BitVec;
+use crate::huffman::HuffmanCode;
 
 mod bitvec;
+mod huffman;
 
 const FRAMERATE: u32 = 7;
 const RESCALE_WIDTH: u32 = 40;
 const RESCALE_HEIGHT: u32 = 30;
-const PALETTE: &[Rgb<u8>] = &[Rgb([0x00; 3]), Rgb([0xFF; 3])];
+const PALETTE: &[Rgb<u8>] = &[
+    Rgb([0x00; 3]),
+    // Rgb([0x55; 3]),
+    // Rgb([0xAA; 3]),
+    Rgb([0xFF; 3]),
+];
 const START_OFFSET: u32 = 30;
 const MAX_FRAMES: u32 = u32::MAX;
 const DOWNSCALE_FILTER: FilterType = FilterType::Gaussian;
@@ -52,10 +60,10 @@ impl ColorMap for Palette {
     }
 }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
 struct Run {
     length: u32,
     kind: u8,
-    extra_data: BitVec,
 }
 
 #[derive(Clone, Copy)]
@@ -114,19 +122,28 @@ fn main() {
         .map(|v| encode_frame(&v[1], &v[0]))
         .collect();
 
-    let mut movie = BitVec::new();
-    movie.write_bits(FRAMERATE, 8);
-    movie.write_bits(RESCALE_WIDTH, 8);
-    movie.write_bits(RESCALE_HEIGHT, 8);
-    for color in PALETTE {
-        for &channel in color.0.iter().rev() {
-            movie.write_bits(channel as u32, 8);
+    let mut run_freq = HashMap::new();
+    for rects in &data {
+        for (_, _, runs) in rects {
+            for &run in runs {
+                *run_freq.entry(run).or_default() += 1;
+            }
         }
     }
+    let runs_huffman = HuffmanCode::new(run_freq);
+
+    let (structure, values) = runs_huffman.structure();
+
+    let mut runs_data = BitVec::new();
+    for run in values {
+        runs_data.write_bits(run.kind as u32, BPP + 1);
+        runs_data.write_int(run.length);
+    }
+
+    let mut movie = BitVec::new();
+    let frames = data.len();
 
     let mut orderings = [0; 4];
-    let mut kinds = [0; 8];
-    let mut lengths = [0; (RESCALE_WIDTH * RESCALE_HEIGHT) as usize];
     for rects in data {
         movie.write_int(rects.len() as u32 + 1);
         let mut last_index = -1;
@@ -142,27 +159,67 @@ fn main() {
                 orderings[order as usize] += 1;
             }
             for run in runs {
-                movie.write_bits(run.kind as u32, BPP + 1);
-                if run.kind > UNCHANGED_BIT as u8 {
-                    movie.append(run.extra_data);
-                } else {
-                    movie.write_int(run.length);
-                    lengths[run.length as usize - 1] += 1;
-                }
-                kinds[run.kind as usize] += 1;
+                runs_huffman.encode_value(&mut movie, &run);
             }
         }
     }
 
+    println!("cargo:warning=Frames {frames}");
     println!("cargo:warning=Orderings {:?}", orderings);
-    println!("cargo:warning=Kinds {:?}", kinds);
-    println!("cargo:warning=Movie length {}", (movie.len() + 7) / 8);
+    println!(
+        "cargo:warning=Movie size {}",
+        movie.bytes() + structure.bytes() + runs_data.bytes()
+    );
 
     movie
         .dump(BufWriter::new(
             File::create(format!("{}/movie.bin", env::var("OUT_DIR").unwrap())).unwrap(),
         ))
         .unwrap();
+
+    structure
+        .dump(BufWriter::new(
+            File::create(format!("{}/runs-tree.bin", env::var("OUT_DIR").unwrap())).unwrap(),
+        ))
+        .unwrap();
+
+    runs_data
+        .dump(BufWriter::new(
+            File::create(format!("{}/runs-data.bin", env::var("OUT_DIR").unwrap())).unwrap(),
+        ))
+        .unwrap();
+
+    let mut code_file = BufWriter::new(
+        File::create(format!("{}/generated.rs", env::var("OUT_DIR").unwrap())).unwrap(),
+    );
+
+    write!(
+        code_file,
+        "mod generated {{
+        pub const WIDTH: u32 = {RESCALE_WIDTH};
+        pub const HEIGHT: u32 = {RESCALE_HEIGHT};
+        pub const FRAMECOUNT: u32 = {frames};
+        pub const FRAMERATE: u32 = {FRAMERATE};"
+    )
+    .unwrap();
+
+    runs_huffman
+        .emit_decoder(&mut code_file, "decode_run", "(u8, u32)", |to, run| {
+            write!(to, "({}, {})", run.kind, run.length)
+        })
+        .unwrap();
+
+    write!(code_file, "pub const PALETTE: [u32; {}] = [", PALETTE.len()).unwrap();
+    for color in PALETTE {
+        write!(code_file, "0x").unwrap();
+        for &channel in color.0.iter().rev() {
+            write!(code_file, "{:X}", channel).unwrap();
+        }
+        write!(code_file, ",").unwrap();
+    }
+    write!(code_file, "];").unwrap();
+
+    write!(code_file, "}}").unwrap();
 
     assert!(Command::new("./audio.py").status().unwrap().success());
 }
@@ -274,7 +331,6 @@ fn encode(mut value_sets: impl Iterator<Item = u8>) -> Vec<Run> {
             data.push(Run {
                 length,
                 kind: current.trailing_zeros() as u8,
-                extra_data: BitVec::new(),
             });
             length = 1;
             current = next;
@@ -286,31 +342,6 @@ fn encode(mut value_sets: impl Iterator<Item = u8>) -> Vec<Run> {
     data.push(Run {
         length,
         kind: current.trailing_zeros() as u8,
-        extra_data: BitVec::new(),
-    });
-
-    data.dedup_by(|next, prev| {
-        if prev.length + next.length <= UNCHANGED_BIT && next.kind < UNCHANGED_BIT as u8 {
-            if prev.kind < UNCHANGED_BIT as u8 {
-                for _ in 0..prev.length {
-                    prev.extra_data.write_bits(prev.kind as u32, BPP);
-                }
-                for _ in 0..next.length {
-                    prev.extra_data.write_bits(next.kind as u32, BPP);
-                }
-                prev.length += next.length;
-                prev.kind = (UNCHANGED_BIT + prev.length - 1) as u8;
-                return true;
-            } else if prev.kind > UNCHANGED_BIT as u8 {
-                for _ in 0..next.length {
-                    prev.extra_data.write_bits(next.kind as u32, BPP);
-                }
-                prev.kind += next.length as u8;
-                prev.length += next.length;
-                return true;
-            }
-        }
-        false
     });
 
     data

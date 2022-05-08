@@ -105,7 +105,7 @@ struct Note {
 }
 
 struct ChannelReader {
-    stream: BitStream,
+    stream: BitStream<'static>,
     delta_bits: u8,
     deltas: &'static [u32],
     length_bits: u8,
@@ -116,9 +116,9 @@ struct ChannelReader {
 
 impl ChannelReader {
     fn next(&mut self) -> Option<Note> {
-        let delta = self.deltas[self.stream.read_bits(self.delta_bits)? as usize];
-        let length = self.lengths[self.stream.read_bits(self.length_bits)? as usize];
-        let pitch = self.pitches[self.stream.read_bits(self.pitch_bits)? as usize];
+        let delta = self.deltas[self.stream.read_bits(self.delta_bits) as usize];
+        let length = self.lengths[self.stream.read_bits(self.length_bits) as usize];
+        let pitch = self.pitches[self.stream.read_bits(self.pitch_bits) as usize];
         Some(Note {
             delta,
             length,

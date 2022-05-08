@@ -12,6 +12,7 @@ const FIBONACCI: [u32; 46] = {
     numbers
 };
 
+#[derive(Clone)]
 pub struct BitVec {
     data: Vec<bool>, // lol
 }
@@ -57,8 +58,12 @@ impl BitVec {
         self.data.len()
     }
 
-    pub fn append(&mut self, other: BitVec) {
-        self.data.extend(other.data);
+    pub fn bytes(&self) -> usize {
+        (self.data.len() + 7) / 8
+    }
+
+    pub fn append(&mut self, other: &BitVec) {
+        self.data.extend_from_slice(&other.data);
     }
 
     pub fn dump(&self, mut to: impl Write) -> std::io::Result<()> {

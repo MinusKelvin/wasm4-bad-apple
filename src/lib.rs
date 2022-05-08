@@ -5,37 +5,36 @@ mod audio;
 mod bitstream;
 mod wasm4;
 
+include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+use generated::*;
+
 use core::mem::MaybeUninit;
 
 use bitstream::BitStream;
 
 const MOVIE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/movie.bin"));
+const RUNS_TREE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runs-tree.bin"));
+const RUNS_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/runs-data.bin"));
 
-const FRAMERATE: u32 = MOVIE[0] as u32;
-const WIDTH: u32 = MOVIE[1] as u32;
-const HEIGHT: u32 = MOVIE[2] as u32;
-const BPP: u8 = 1;
+const BPP: u8 = generated::PALETTE.len().trailing_zeros() as u8;
 
 const PIXEL_SIZE: u32 = match (160 / WIDTH, 160 / HEIGHT) {
     (w, h) if w < h => w,
     (_, h) => h,
 };
 
-static mut STATE: MaybeUninit<(BitStream, u32, audio::Program)> = MaybeUninit::uninit();
+static mut STATE: MaybeUninit<(BitStream, u32, u32, audio::Program)> = MaybeUninit::uninit();
 
 #[no_mangle]
 fn start() {
     unsafe {
         *wasm4::SYSTEM_FLAGS =
             wasm4::SYSTEM_PRESERVE_FRAMEBUFFER | wasm4::SYSTEM_HIDE_GAMEPAD_OVERLAY;
-        STATE = MaybeUninit::new((BitStream::new(MOVIE), 0, audio::Program::new()));
-        let stream = &mut STATE.assume_init_mut().0;
-        // Skip header
-        stream.read_bits(24);
+        STATE = MaybeUninit::new((BitStream::new(MOVIE), 0, 0, audio::Program::new()));
         // Load palette
         let palette = &mut *wasm4::PALETTE;
-        for i in 0..1 << BPP {
-            palette[i] = stream.read_bits(24).unwrap();
+        for i in 0..generated::PALETTE.len() {
+            palette[i] = PALETTE[i];
         }
         if BPP == 1 {
             palette[3] = (palette[0] * 2 + palette[1]) / 3;
@@ -53,67 +52,84 @@ fn update() {
 
     while state.1 >= 60 {
         state.1 -= 60;
-        if decode_frame(&mut state.0).is_none() {
+        if state.2 == FRAMECOUNT {
             start();
             decode_frame(&mut state.0);
         }
+        state.2 += 1;
+        decode_frame(&mut state.0);
     }
 
-    state.2.update();
+    state.3.update();
 }
 
-fn decode_frame(stream: &mut BitStream) -> Option<()> {
+fn decode_frame(stream: &mut BitStream) {
     if BPP == 1 {
         undo_smooth_filter();
     }
 
     let mut i = -1;
-    for _ in 0..stream.read_int()? - 1 {
-        i += stream.read_int()? as i32;
+    for _ in 0..stream.read_int() - 1 {
+        i += stream.read_int() as i32;
         let (x, y) = get_xy(i as u32, 0, WIDTH, HEIGHT);
-        let (tx, ty) = get_xy(i as u32 + stream.read_int()? - 1, 0, WIDTH, HEIGHT);
+        let (tx, ty) = get_xy(i as u32 + stream.read_int() - 1, 0, WIDTH, HEIGHT);
         let w = tx - x + 1;
         let h = ty - y + 1;
 
-        decode_rect(stream, x, y, w, h)?;
+        decode_rect(stream, x, y, w, h);
     }
 
     if BPP == 1 {
         apply_smooth_filter();
     }
-
-    Some(())
 }
 
-fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32, h: u32) -> Option<()> {
+fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32, h: u32) {
     let order = match w == 1 || h == 1 {
         true => 0,
-        false => stream.read_bits(2)?,
+        false => stream.read_bits(2),
     };
 
     let mut i = 0;
     while i < w * h {
-        let kind = stream.read_bits(BPP + 1)?;
+        let index = huffman_index(stream, RUNS_TREE);
+        let mut rundata = BitStream::new(RUNS_DATA);
+        for _ in 0..index {
+            rundata.read_bits(BPP + 1);
+            rundata.read_int();
+        }
+        let kind = rundata.read_bits(BPP + 1);
+        let length = rundata.read_int();
 
-        if kind > 1 << BPP {
-            let length = kind - (1 << BPP) + 1;
-            for _ in 0..length {
-                let (dx, dy) = get_xy(i, order, w, h);
-                set(x + dx, y + dy, stream.read_bits(BPP)? as u8);
-                i += 1;
-            }
-        } else if kind == 1 << BPP {
-            i += stream.read_int()?;
+        if kind == 1 << BPP {
+            i += length;
         } else {
-            for _ in 0..stream.read_int()? {
+            for _ in 0..length {
                 let (dx, dy) = get_xy(i, order, w, h);
                 set(x + dx, y + dy, kind as u8);
                 i += 1;
             }
         }
     }
+}
 
-    Some(())
+fn huffman_index(stream: &mut BitStream, tree: &[u8]) -> usize {
+    let mut tree_stream = BitStream::new(tree);
+    let mut value = 0;
+    while !tree_stream.read_one() {
+        if stream.read_one() {
+            value += count(&mut tree_stream);
+        }
+    }
+    value
+}
+
+fn count(tree: &mut BitStream) -> usize {
+    if tree.read_one() {
+        1
+    } else {
+        count(tree) + count(tree)
+    }
 }
 
 fn set(x: u32, y: u32, v: u8) {
