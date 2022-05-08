@@ -125,6 +125,7 @@ fn main() {
     let mut run_freq = HashMap::new();
     let mut orderings = [0; 4];
     let mut num_rects = vec![];
+    let mut biggest_run = 0;
     for rects in &data {
         for &(rect, order, ref runs) in rects {
             if rect.h != 1 && rect.w != 1 {
@@ -132,6 +133,10 @@ fn main() {
             }
             for &run in runs {
                 *run_freq.entry(run).or_default() += 1;
+                let encoded = run.kind as u32 + run.length * (PALETTE.len() as u32 + 1);
+                if encoded > biggest_run {
+                    biggest_run = encoded;
+                }
             }
         }
         while rects.len() >= num_rects.len() {
@@ -146,14 +151,16 @@ fn main() {
     }
 
     let runs_huffman = HuffmanCode::new(run_freq);
-    let kind_huffman = HuffmanCode::new(kind_freq.into_iter().enumerate().filter(|&(_, v)| v > 0));
 
     let (structure, values) = runs_huffman.structure();
+    let run_value_bits = (biggest_run + 1).next_power_of_two().trailing_zeros();
 
     let mut runs_data = BitVec::new();
     for run in values {
-        kind_huffman.encode_value(&mut runs_data, &(run.kind as usize));
-        runs_data.write_int(run.length);
+        runs_data.write_bits(
+            run.kind as u32 + run.length * (PALETTE.len() as u32 + 1),
+            run_value_bits,
+        );
     }
 
     let order_huffman = HuffmanCode::new(orderings.into_iter().enumerate().filter(|&(_, v)| v > 0));
@@ -216,15 +223,11 @@ fn main() {
         pub const WIDTH: u32 = {RESCALE_WIDTH};
         pub const HEIGHT: u32 = {RESCALE_HEIGHT};
         pub const FRAMECOUNT: u32 = {frames};
-        pub const FRAMERATE: u32 = {FRAMERATE};"
+        pub const FRAMERATE: u32 = {FRAMERATE};
+        pub const RUN_DATA_SIZE: u32 = {run_value_bits};"
     )
     .unwrap();
 
-    kind_huffman
-        .emit_decoder(&mut code_file, "decode_kind", "u8", |to, kind| {
-            write!(to, "{kind}")
-        })
-        .unwrap();
     order_huffman
         .emit_decoder(&mut code_file, "decode_order", "u32", |to, order| {
             write!(to, "{order}")

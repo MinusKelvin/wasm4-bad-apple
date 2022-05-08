@@ -92,14 +92,12 @@ fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32, h: u32) {
 
     let mut i = 0;
     while i < w * h {
-        let index = huffman_index(stream, RUNS_TREE);
-        let mut rundata = BitStream::new(RUNS_DATA);
-        for _ in 0..index {
-            decode_kind(|| rundata.read_one());
-            rundata.read_int();
-        }
-        let kind = decode_kind(|| rundata.read_one());
-        let length = rundata.read_int();
+        let index = huffman_index(stream, RUNS_TREE) * RUN_DATA_SIZE as usize;
+        let mut rundata = BitStream::new(&RUNS_DATA[(index / 8)..]);
+        rundata.read_bits((index % 8) as u8);
+        let rundata = rundata.read_bits(RUN_DATA_SIZE as u8);
+        let kind = rundata % ((1 << BPP) + 1);
+        let length = rundata / ((1 << BPP) + 1);
 
         if kind == 1 << BPP {
             i += length;
