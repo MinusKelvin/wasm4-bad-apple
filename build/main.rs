@@ -123,29 +123,48 @@ fn main() {
         .collect();
 
     let mut run_freq = HashMap::new();
+    let mut orderings = [0; 4];
+    let mut num_rects = vec![];
     for rects in &data {
-        for (_, _, runs) in rects {
+        for &(rect, order, ref runs) in rects {
+            if rect.h != 1 && rect.w != 1 {
+                orderings[order] += 1;
+            }
             for &run in runs {
                 *run_freq.entry(run).or_default() += 1;
             }
         }
+        while rects.len() >= num_rects.len() {
+            num_rects.push(0);
+        }
+        num_rects[rects.len()] += 1;
     }
+
+    let mut kind_freq = [0; 5];
+    for run in run_freq.keys() {
+        kind_freq[run.kind as usize] += 1;
+    }
+
     let runs_huffman = HuffmanCode::new(run_freq);
+    let kind_huffman = HuffmanCode::new(kind_freq.into_iter().enumerate().filter(|&(_, v)| v > 0));
 
     let (structure, values) = runs_huffman.structure();
 
     let mut runs_data = BitVec::new();
     for run in values {
-        runs_data.write_bits(run.kind as u32, BPP + 1);
+        kind_huffman.encode_value(&mut runs_data, &(run.kind as usize));
         runs_data.write_int(run.length);
     }
 
-    let mut movie = BitVec::new();
-    let frames = data.len();
+    let order_huffman = HuffmanCode::new(orderings.into_iter().enumerate().filter(|&(_, v)| v > 0));
 
-    let mut orderings = [0; 4];
+    let num_rects_huffman =
+        HuffmanCode::new(num_rects.into_iter().enumerate().filter(|&(_, v)| v > 0));
+
+    let frames = data.len();
+    let mut movie = BitVec::new();
     for rects in data {
-        movie.write_int(rects.len() as u32 + 1);
+        num_rects_huffman.encode_value(&mut movie, &rects.len());
         let mut last_index = -1;
         for (rect, order, runs) in rects {
             let i = rect.y * RESCALE_WIDTH + rect.x;
@@ -155,8 +174,7 @@ fn main() {
             last_index = i as i32;
 
             if rect.h != 1 && rect.w != 1 {
-                movie.write_bits(order as u32, 2);
-                orderings[order as usize] += 1;
+                order_huffman.encode_value(&mut movie, &order);
             }
             for run in runs {
                 runs_huffman.encode_value(&mut movie, &run);
@@ -165,7 +183,6 @@ fn main() {
     }
 
     println!("cargo:warning=Frames {frames}");
-    println!("cargo:warning=Orderings {:?}", orderings);
     println!(
         "cargo:warning=Movie size {}",
         movie.bytes() + structure.bytes() + runs_data.bytes()
@@ -203,9 +220,19 @@ fn main() {
     )
     .unwrap();
 
-    runs_huffman
-        .emit_decoder(&mut code_file, "decode_run", "(u8, u32)", |to, run| {
-            write!(to, "({}, {})", run.kind, run.length)
+    kind_huffman
+        .emit_decoder(&mut code_file, "decode_kind", "u8", |to, kind| {
+            write!(to, "{kind}")
+        })
+        .unwrap();
+    order_huffman
+        .emit_decoder(&mut code_file, "decode_order", "u32", |to, order| {
+            write!(to, "{order}")
+        })
+        .unwrap();
+    num_rects_huffman
+        .emit_decoder(&mut code_file, "decode_num_rects", "u32", |to, order| {
+            write!(to, "{order}")
         })
         .unwrap();
 
