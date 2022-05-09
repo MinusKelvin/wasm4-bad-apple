@@ -13,36 +13,36 @@ impl BitStream<'_> {
         }
     }
 
-    pub fn read_bits(&mut self, count: u8) -> u32 {
+    pub fn read_bits(&mut self, count: u8) -> Option<u32> {
         let mut bits = 0;
         for i in 0..count {
-            bits |= (self.read_one() as u32) << i;
+            bits |= (self.read_one()? as u32) << i;
         }
-        bits
+        Some(bits)
     }
 
-    pub fn read_one(&mut self) -> bool {
+    pub fn read_one(&mut self) -> Option<bool> {
         if self.current_bit == 8 {
-            let (&next, rest) = self.from.split_first().unwrap();
+            let (&next, rest) = self.from.split_first()?;
             self.current = next;
             self.from = rest;
             self.current_bit = 0;
         }
         let result = self.current & 1 << self.current_bit != 0;
         self.current_bit += 1;
-        result
+        Some(result)
     }
 
-    fn read_fibonacci(&mut self) -> u32 {
+    fn read_fibonacci(&mut self) -> Option<u32> {
         let mut v = 0;
         let mut a = 1;
         let mut b = 2;
         let mut prev = false;
         loop {
-            let next = self.read_one();
+            let next = self.read_one()?;
             if next {
                 if prev {
-                    return v;
+                    return Some(v);
                 }
                 v += a;
             }
@@ -53,7 +53,7 @@ impl BitStream<'_> {
         }
     }
 
-    pub fn read_int(&mut self) -> u32 {
+    pub fn read_int(&mut self) -> Option<u32> {
         self.read_fibonacci()
     }
 }

@@ -54,7 +54,7 @@ fn update() {
         state.1 -= 60;
         if state.2 == FRAMECOUNT {
             start();
-            decode_frame(&mut state.0);
+            return;
         }
         state.2 += 1;
         decode_frame(&mut state.0);
@@ -69,10 +69,10 @@ fn decode_frame(stream: &mut BitStream) {
     }
 
     let mut i = -1;
-    for _ in 0..decode_num_rects(|| stream.read_one()) {
-        i += stream.read_int() as i32;
+    for _ in 0..decode_num_rects(|| stream.read_one().unwrap()) {
+        i += stream.read_int().unwrap() as i32;
         let (x, y) = get_xy(i as u32, 0, WIDTH, HEIGHT);
-        let (tx, ty) = get_xy(i as u32 + stream.read_int() - 1, 0, WIDTH, HEIGHT);
+        let (tx, ty) = get_xy(i as u32 + stream.read_int().unwrap() - 1, 0, WIDTH, HEIGHT);
         let w = tx - x + 1;
         let h = ty - y + 1;
 
@@ -87,7 +87,7 @@ fn decode_frame(stream: &mut BitStream) {
 fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32, h: u32) {
     let order = match w == 1 || h == 1 {
         true => 0,
-        false => decode_order(|| stream.read_one()),
+        false => decode_order(|| stream.read_one().unwrap()),
     };
 
     let mut i = 0;
@@ -95,7 +95,7 @@ fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32, h: u32) {
         let index = huffman_index(stream, RUNS_TREE) * RUN_DATA_SIZE as usize;
         let mut rundata = BitStream::new(&RUNS_DATA[(index / 8)..]);
         rundata.read_bits((index % 8) as u8);
-        let rundata = rundata.read_bits(RUN_DATA_SIZE as u8);
+        let rundata = rundata.read_bits(RUN_DATA_SIZE as u8).unwrap();
         let kind = rundata % ((1 << BPP) + 1);
         let length = rundata / ((1 << BPP) + 1);
 
@@ -114,8 +114,8 @@ fn decode_rect(stream: &mut BitStream, x: u32, y: u32, w: u32, h: u32) {
 fn huffman_index(stream: &mut BitStream, tree: &[u8]) -> usize {
     let mut tree_stream = BitStream::new(tree);
     let mut value = 0;
-    while !tree_stream.read_one() {
-        if stream.read_one() {
+    while !tree_stream.read_one().unwrap() {
+        if stream.read_one().unwrap() {
             value += count(&mut tree_stream);
         }
     }
@@ -123,7 +123,7 @@ fn huffman_index(stream: &mut BitStream, tree: &[u8]) -> usize {
 }
 
 fn count(tree: &mut BitStream) -> usize {
-    if tree.read_one() {
+    if tree.read_one().unwrap() {
         1
     } else {
         count(tree) + count(tree)
