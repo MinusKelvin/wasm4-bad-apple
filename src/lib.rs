@@ -183,7 +183,7 @@ fn get_xy(i: u32, order: u32, w: u32, h: u32) -> (u32, u32) {
 
 #[panic_handler]
 fn panic_handler(_: &core::panic::PanicInfo) -> ! {
-    core::arch::wasm::unreachable()
+    loop {}
 }
 
 fn undo_smooth_filter() {
