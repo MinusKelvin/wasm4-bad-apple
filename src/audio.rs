@@ -2,33 +2,22 @@
 
 use crate::bitstream::BitStream;
 
-const PULSE_1: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pulse.bin"));
-const PULSE_2: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/noise.bin"));
+const PULSE_1: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pulse_one.bin"));
+const PULSE_2: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/pulse_two.bin"));
 const TRIANGLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/triangle.bin"));
+const NOISE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/noise.bin"));
 
 pub struct Program {
-    noise: ChannelPlayer,
-    pulse: ChannelPlayer,
+    pulse_one: ChannelPlayer,
+    pulse_two: ChannelPlayer,
     triangle: ChannelPlayer,
+    noise: ChannelPlayer,
 }
 
 impl Program {
     pub fn new() -> Self {
         Self {
-            noise: ChannelPlayer::new(
-                ChannelReader {
-                    stream: BitStream::new(PULSE_2),
-                    delta_bits: 3,
-                    deltas: &[0, 6, 7, 13, 14, 26, 27, 2541],
-                    length_bits: 0,
-                    lengths: &[2],
-                    pitch_bits: 0,
-                    pitches: &[165],
-                },
-                Channel::PulseTwo,
-                20,
-            ),
-            pulse: ChannelPlayer::new(
+            pulse_one: ChannelPlayer::new(
                 ChannelReader {
                     stream: BitStream::new(PULSE_1),
                     delta_bits: 3,
@@ -39,6 +28,19 @@ impl Program {
                     pitches: &[277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494, 554, 587, 622, 659, 698, 740, 784],
                 },
                 Channel::PulseOne,
+                30,
+            ),
+            pulse_two: ChannelPlayer::new(
+                ChannelReader {
+                    stream: BitStream::new(PULSE_2),
+                    delta_bits: 3,
+                    deltas: &[0, 6, 7, 13, 14, 26, 27, 2541],
+                    length_bits: 0,
+                    lengths: &[2],
+                    pitch_bits: 0,
+                    pitches: &[165],
+                },
+                Channel::PulseTwo,
                 30,
             ),
             triangle: ChannelPlayer::new(
@@ -54,13 +56,27 @@ impl Program {
                 Channel::Triangle,
                 100,
             ),
+            noise: ChannelPlayer::new(
+                ChannelReader {
+                    stream: BitStream::new(NOISE),
+                    delta_bits: 4,
+                    deltas: &[12, 26, 27, 40, 41, 52, 53, 786, 841, 863],
+                    length_bits: 1,
+                    lengths: &[3, 9],
+                    pitch_bits: 0,
+                    pitches: &[698],
+                },
+                Channel::Noise,
+                30,
+            )
         }
     }
 
     pub fn update(&mut self) {
-        self.noise.tick();
-        self.pulse.tick();
+        self.pulse_one.tick();
+        self.pulse_two.tick();
         self.triangle.tick();
+        self.noise.tick();
     }
 }
 
@@ -80,7 +96,8 @@ pub struct Tone {
     pub decay: u16,
     pub sustain: u16,
     pub release: u16,
-    pub volume: u32,
+    pub peak: u8,
+    pub volume: u8,
     pub channel: Channel,
 }
 
@@ -93,7 +110,7 @@ fn tone(t: Tone) {
     crate::wasm4::tone(
         frequency,
         duration,
-        t.volume << 8 | t.volume,
+        (t.peak as u32) << 8 | t.volume as u32,
         t.channel as u32,
     );
 }
@@ -130,12 +147,12 @@ impl ChannelReader {
 struct ChannelPlayer {
     reader: ChannelReader,
     channel: Channel,
-    volume: u32,
+    volume: u8,
     note: Option<Note>,
 }
 
 impl ChannelPlayer {
-    fn new(mut reader: ChannelReader, channel: Channel, volume: u32) -> Self {
+    fn new(mut reader: ChannelReader, channel: Channel, volume: u8) -> Self {
         let note = reader.next();
         Self {
             reader,
@@ -151,7 +168,7 @@ impl ChannelPlayer {
                 note.delta -= 1;
             }
             if note.delta == 0 {
-                tone(Tone {
+                let mut t = Tone {
                     start_freq: note.pitch,
                     end_freq: note.pitch,
                     attack: 0,
@@ -159,10 +176,19 @@ impl ChannelPlayer {
                     sustain: note.length,
                     release: 0,
                     channel: self.channel,
+                    peak: self.volume,
                     volume: self.volume,
-                });
+                };
+                if let Channel::Noise = t.channel {
+                    t.release = note.length;
+                    t.decay = 1;
+                    t.sustain = 0;
+                    t.peak = 100;
+                    t.volume = 5;
+                    t.end_freq = 1000;
+                }
+                tone(t);
                 self.note = self.reader.next();
-            } else {
             }
         }
     }

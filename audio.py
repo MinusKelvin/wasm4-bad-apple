@@ -25,7 +25,7 @@ class Bitstream:
             self.shift = 0
 
 fps = 65.5
-channels = ["noise", "triangle", "pulse"]
+channels = ["pulse_two", "triangle", "pulse_one", "noise"]
 midi_data = pretty_midi.PrettyMIDI("music.mid")
 for instrument, name in zip(midi_data.instruments, channels):
     deltas = set()
@@ -55,16 +55,19 @@ for instrument, name in zip(midi_data.instruments, channels):
         delta = deltas.index(delta)
         length = lengths.index(length)
         pitch = pitches.index(pitch)
-        if name == "noise":
+        if name == "pulse_two":
             stream.write(delta, 3)
         if name == "triangle":
             stream.write(delta, 4)
             stream.write(length, 3)
             stream.write(pitch, 5)
-        if name == "pulse":
+        if name == "pulse_one":
             stream.write(delta, 3)
             stream.write(length, 2)
             stream.write(pitch, 5)
+        if name == "noise":
+            stream.write(delta, 4)
+            stream.write(length, 1)
 
     with open(f"{environ['OUT_DIR']}/{name}.bin", "wb+") as file:
         file.write(bytes(stream.buffer))
